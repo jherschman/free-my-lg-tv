@@ -628,14 +628,17 @@ var Data = (function () {
           for (var j = 0; !e && j < r.results.length && j < 16; j++) addPick(candidates, r.results[j], kind);
           // Trending is only kept when it's on one of the TV's apps: the details say where.
           each(candidates, function (p, n) {
+            p.src = 'hot';
             details(p, function (de) { if (!de && p.app) hot[kind].push(p); n(); });
           }, next);
         });
       }, function () {
         tmdb('/discover/movie?vote_count.gte=30&primary_release_date.gte=' + day(-365) + '&primary_release_date.lte=' + day(0) + common, function (e1, r1) {
           for (var j = 0; !e1 && j < r1.results.length; j++) addPick(fresh.movie, r1.results[j], 'movie');
+          for (var jj = 0; jj < fresh.movie.length; jj++) fresh.movie[jj].src = 'new';
           tmdb('/discover/tv?vote_count.gte=20&air_date.gte=' + day(-90) + '&air_date.lte=' + day(0) + common, function (e2, r2) {
             for (var k = 0; !e2 && k < r2.results.length; k++) addPick(fresh.tv, r2.results[k], 'tv');
+            for (var kk = 0; kk < fresh.tv.length; kk++) fresh.tv[kk].src = 'new';
             var list = [], seen = {};
             alternate(list, seen, hot.movie, hot.tv, 24);
             alternate(list, seen, fresh.movie, fresh.tv, 24);
@@ -684,7 +687,7 @@ var Data = (function () {
     if (!KEY || fetchingRecs || !installed.length) return;
     var t = Date.now(), p = hourPeriod(new Date()), st = sourceStamp();
     if (st === stamp && failedAt && t - failedAt < 10 * 60000 && t >= failedAt) return;
-    var stale = st !== stamp || p !== period || t - listAt > 6 * 3600000 || t < listAt || !picks.length || !recommended.length || listLang !== I18N.lang;
+    var stale = st !== stamp || p !== period || t - listAt > 6 * 3600000 || t < listAt || !picks.length || !picks[0].src || !recommended.length || listLang !== I18N.lang;
     var wanted = all(), missing = false;
     for (var i = 0; i < wanted.length; i++) missing = missing || !wanted[i].detailed;
     if (!stale && !missing) return;
@@ -715,9 +718,10 @@ var Data = (function () {
 
   /** This hour's picks for the three tabs, without repeats (the screensaver shows them too). */
   function all() {
-    var out = [], seen = {}, kinds = [null, 'movie', 'tv', 'recommended'];
+    var out = [], seen = {}, kinds = [null, 'hot', 'new', 'recommended'];
     for (var k = 0; k < kinds.length; k++) {
-      var list = kinds[k] === 'recommended' ? nowRecommended() : now(kinds[k]);
+      var list = kinds[k] === 'recommended' ? nowRecommended() : kinds[k] === null ? now(null)
+          : hourly(picks.filter(function (p) { return p.src === kinds[k]; }), null);
       for (var i = 0; i < list.length; i++) if (!seen[keyOf(list[i])]) { seen[keyOf(list[i])] = true; out.push(list[i]); }
     }
     return out;
@@ -761,11 +765,11 @@ var Data = (function () {
     recsError: function () { return recsError; },
     picks: now,
     showcase: all,
-    /** The home screen's tabs: 0 Recents, 1 Explore, 2 Recommended. */
+    /** The home screen's tabs: 0 Trending (this week, on the TV's apps), 1 New (recent releases), 2 Recommended. */
     tab: function (i) {
-      if (i === 0) return opened.filter(function (p) { return !p.app || usable(p.app); }).slice(0, 6);
       if (i === 2) return nowRecommended();
-      return now(null);
+      var src = i === 0 ? 'hot' : 'new';
+      return hourly(picks.filter(function (p) { return p.src === src; }), null);
     },
     hasRecents: function () { return opened.length > 0; },
     findLink: findLink,

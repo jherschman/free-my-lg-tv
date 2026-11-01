@@ -360,7 +360,7 @@
   // MARK: - Focus
 
   var Z = {TOP: 'top', CARDS: 'cards', SHELF: 'shelf', DRAWER: 'drawer', APPS: 'apps', SETTINGS: 'settings', EDIT: 'edit', LANG: 'lang', CITY: 'city', KEY: 'key', ABOUT: 'about'};
-  var st = {zone: Z.SHELF, top: 0, tab: Data.hasRecents() ? 0 : 1, card: 0, shelf: 0, drawer: 0, grid: 0, row: 0, edit: 0, lang: 0, city: 0, key: 0};
+  var st = {zone: Z.SHELF, top: 0, tab: 0, card: 0, shelf: 0, drawer: 0, grid: 0, row: 0, edit: 0, lang: 0, city: 0, key: 0};
   var cards = [];
 
   function sheetOpen() { return st.zone === Z.APPS || st.zone === Z.SETTINGS || st.zone === Z.EDIT || st.zone === Z.LANG || st.zone === Z.CITY || st.zone === Z.KEY || st.zone === Z.ABOUT; }
@@ -427,7 +427,7 @@
     $('title').textContent = tr('For You');
     var tabs = $('tabs');
     tabs.innerHTML = '';
-    var names = [tr('Recents'), tr('Explore'), tr('Recommended')];
+    var names = [tr('Trending'), tr('New'), tr('Recommended')];
     for (var i = 0; i < 3; i++) {
       var t = el('button', 'tab', tabs, names[i]);
       hover(t, Z.TOP, i);
@@ -460,10 +460,6 @@
     var list = Data.tab(st.tab);
     var holder = $('cards');
     setClass(body, 'no-picks', !list.length);
-    // Recents before anything was opened from here: say how it fills, under the clock.
-    var hint = st.tab === 0 && !list.length && Data.hasKey();
-    setClass(body, 'recents-empty', hint);
-    $('hint').textContent = hint ? tr('Movies and shows you open from Explore or Recommended show up here.') : '';
     setClass(body, 'no-key', !Data.hasKey());   // as on Android: no title or tabs that could never show anything
     if (!Data.hasKey() && st.zone === Z.TOP && st.top < 3) st.top = 3;
     var same = list.length === cards.length;
@@ -646,16 +642,38 @@
 
   var drawerItems = [], drawerInputs = 0;
 
+  /** A console's input, by the name the TV gives it (HDMI-CEC names a PS5 "PS5"). */
+  var GAME = /ps5|ps4|playstation|xbox|switch|nintendo/i;
+
+  /** Consoles first, then inputs with something plugged in, then Live TV, then empty ports. */
+  function inputRank(x) {
+    if (GAME.test(x.label || '')) return 0;
+    if (x.key !== 'live' && x.connected) return 1;
+    if (x.key === 'live') return 2;
+    return 3;
+  }
+
+  /** LG's Multi View (two screens at once): opened directly where the TV lets an app, else how to reach it. */
+  function multiView() {
+    TV.launch('com.webos.app.multiview', null, function (ok) {
+      if (!ok) toast(tr('Press ⚙ on the remote, then Multi View.'));
+    });
+  }
+
   function renderDrawer() {
     var d = $('drawer');
     d.innerHTML = '';
     drawerItems = [];
-    for (var i = 0; i < inputs.length; i++) {
-      var x = inputs[i];
-      drawerItems.push({label: x.label || tr('Live TV'), symbol: x.symbol, off: !x.connected, run: launcher(x.id, x.label)});
+    var ordered = inputs.map(function (x, i) { return {x: x, i: i}; }).sort(function (a, b) {
+      return inputRank(a.x) - inputRank(b.x) || a.i - b.i;
+    });
+    for (var i = 0; i < ordered.length; i++) {
+      var x = ordered[i].x, game = GAME.test(x.label || '');
+      drawerItems.push({label: x.label || tr('Live TV'), symbol: game ? 'gamepad' : x.symbol, off: !x.connected, run: launcher(x.id, x.label)});
     }
     drawerInputs = drawerItems.length;
     drawerItems.push({label: tr('All Apps'), symbol: 'apps', run: openApps});
+    if (TV.name === 'webos') drawerItems.push({label: tr('Multi View'), symbol: 'recents', run: multiView});
     drawerItems.push({label: tr('Home Settings'), symbol: 'settings', run: openSettings});
     if (TV.canOpenSettings) drawerItems.push({label: tr('TV Settings'), symbol: 'tv_settings', run: tvSettings});
     var n = drawerItems.length, gap = 18, groupGap = 56, groups = drawerInputs > 0 && drawerInputs < n ? 2 : 1;
@@ -1743,7 +1761,7 @@
     st.zone = Z.SHELF;
     st.shelf = 0;
     st.card = 0;
-    selectTab(Data.hasRecents() ? 0 : 1);
+    selectTab(0);
     updateFocus();
     restInDrawer();   // drawer_first: out again at once, not only after the TV lists its apps
   }
