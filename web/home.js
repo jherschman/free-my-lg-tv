@@ -1326,6 +1326,15 @@
     return {app: app, params: via ? {contentTarget: 'nuvio://tmdb/' + (p.kind === 'tv' ? 'series' : 'movie') + '/' + p.id} : null};
   }
 
+  /**
+   * What an LG app takes to open a title (launch's params): Netflix its own form of the title's address, the others
+   * the address itself as contentTarget, the way LG's search hands them a title.
+   */
+  function linkParams(appId, link) {
+    if (/^netflix$/.test(appId)) return {contentTarget: 'm=' + link + '&source_type=4'};
+    return {contentTarget: link};
+  }
+
   function launcher(id, name, params) {
     return function () {
       TV.launch(id, params || null, function (ok) {
@@ -1355,8 +1364,14 @@
         else openSettings();
         return;
       case Z.CARDS:
-        var target = pickTarget(cards[st.card]);
-        if (target) { Data.noteOpened(cards[st.card]); launcher(target.app.id, target.app.title, target.params)(); }
+        var pick = cards[st.card], target = pickTarget(pick);
+        if (!target) return;
+        Data.noteOpened(pick);
+        if (target.params) { launcher(target.app.id, target.app.title, target.params)(); return; }
+        // The title's own page in its app, where Watchmode knows it and the app takes links; else the app's home.
+        Data.findLink(pick, function (link) {
+          launcher(target.app.id, target.app.title, link ? linkParams(target.app.id, link) : null)();
+        });
         return;
       case Z.SHELF:
         if (shelf[st.shelf]) launcher(shelf[st.shelf].id, shelf[st.shelf].title)();

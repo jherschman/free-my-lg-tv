@@ -392,6 +392,53 @@ var Data = (function () {
     }, key);
   }
 
+  // MARK: - Opening a title in its app (Watchmode: the title's page on each service, from its TMDB id)
+
+  var WATCHMODE = 'https://api.watchmode.com/v1';
+  /** Found links by "kind:id:app" ('' = none found, not asked again); a refused key isn't tried again. */
+  var links = stored('links') || {};
+
+  function watchmodeKey() { return String(CONFIG.watchmodeKey || '').trim(); }
+
+  function watchmode(path, done) {
+    get(WATCHMODE + path + (path.indexOf('?') >= 0 ? '&' : '?') + 'apiKey=' + encodeURIComponent(watchmodeKey()), {}, done);
+  }
+
+  /** The service's page for the title (its web address, which the apps take as a link), or '' : done(link). */
+  function findLink(p, done) {
+    var key = watchmodeKey(), id = p && p.kind + ':' + p.id + ':' + p.app;
+    if (!key || !p || !p.app || links.refused === key) { done(''); return; }
+    if (links[id] !== undefined) { done(links[id]); return; }
+    var want = null;
+    for (var s = 0; s < SERVICES.length; s++) if (SERVICES[s][1] === p.app) want = SERVICES[s][0].replace(/ /g, '');
+    if (!want) { done(''); return; }
+    var finished = false, timer = setTimeout(function () { end('', false); }, 4000);   // never hold the click long
+    function end(link, keep) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (keep) { links[id] = link; store('links', links); }
+      done(link);
+    }
+    watchmode('/search/?search_field=tmdb_' + p.kind + '_id&search_value=' + p.id, function (err, res) {
+      if (err) { if (/401|rejected/.test(err.message)) { links.refused = key; store('links', links); } end('', false); return; }
+      var found = res && res.title_results && res.title_results[0];
+      if (!found) { end('', true); return; }
+      watchmode('/title/' + found.id + '/sources/?regions=' + REGION, function (err2, sources) {
+        if (err2 || !sources || !sources.length) { end('', !err2); return; }
+        for (var i = 0; i < sources.length; i++) {
+          var src = sources[i], words = String(src.name || '').toLowerCase(), name = words.replace(/ /g, '');
+          // Not a channel sold inside another app ("Paramount+ Amazon Channel"): that link opens the other app.
+          var resold = name.indexOf('channel') >= 0 || name.indexOf('(via') >= 0;
+          var same = !resold && (want === 'max' ? /\bmax\b/.test(words) : name.indexOf(want) >= 0);
+          var url = String(src.web_url || '');
+          if (same && src.type === 'sub' && url.indexOf('https://') === 0) { end(url, true); return; }
+        }
+        end('', true);
+      });
+    });
+  }
+
   var cache = stored('recs') || {};
   var picks = cache.picks || [], listAt = cache.listAt || 0, period = cache.period, listLang = cache.lang || '', stamp = cache.stamp || '';
   /** Recommended tab: the best rated on the TV's apps, and TMDB's recommendations for titles opened from here. */
@@ -721,6 +768,8 @@ var Data = (function () {
       return now(null);
     },
     hasRecents: function () { return opened.length > 0; },
+    findLink: findLink,
+    hasLinks: function () { return !!watchmodeKey(); },
     /** A title opened from the home screen: first in Recents, and a seed for Recommended. */
     noteOpened: function (p) {
       if (!p) return;
