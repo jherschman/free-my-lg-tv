@@ -72,7 +72,7 @@ var Prefs = (function () {
     /** OK on the screensaver opens the title it shows, in its app; any other key only closes it (off by default). */
     saverWatch: function () { return pick('saverWatch', false) === true; },
     /** What the screensaver shows: 'photos' (the picks' photos, as it always has) or 'clock' (a clock and the weather). */
-    saver: function () { return pick('saver', 'photos') === 'clock' ? 'clock' : 'photos'; },
+    saver: function () { var v = pick('saver', 'photos'); return /^(clock|landscapes|cities|nightsky)$/.test(v) ? v : 'photos'; },
     /** Dimming over the picture, for a dark room: 'off', 'low', 'medium', 'high' or 'auto' (medium at night). */
     dim: function () { return pick('dim', 'off'); },
     /** The weather card's forecast: 'hours' (the next 6 hours) or 'days' (the next 5 days). */
@@ -392,6 +392,41 @@ var Data = (function () {
     }, key);
   }
 
+  // MARK: - Screensaver scenery (Wikimedia Commons' featured pictures: freely licensed, credited on screen)
+
+  var SCENERY = {
+    landscapes: 'landscape OR mountains OR lake OR valley OR coast',
+    cities: 'skyline OR cityscape OR "city at night" OR downtown',
+    nightsky: 'aurora OR "milky way" OR "night sky" OR "star trails"'
+  };
+
+  function plain(html) { return String(html || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim(); }
+
+  /** A theme's photos [{url, title, by}], kept a day; done(list). Only wide, large photos (a 16:9 screen). */
+  function scenery(theme, done) {
+    var q = SCENERY[theme];
+    if (!q) { done([]); return; }
+    var kept = stored('scenery.' + theme);
+    if (kept && kept.list && kept.list.length && Date.now() - kept.at < 86400000 && Date.now() >= kept.at) { done(kept.list); return; }
+    var url = 'https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6'
+        + '&gsrlimit=50&gsrsearch=' + encodeURIComponent('incategory:Featured_pictures_on_Wikimedia_Commons filetype:bitmap ' + q)
+        + '&prop=imageinfo&iiprop=url|size|extmetadata&iiurlwidth=1920&iiextmetadatafilter=ObjectName|Artist';
+    get(url, {}, function (err, res) {
+      var pages = res && res.query && res.query.pages, list = [];
+      for (var id in pages) {
+        if (!pages.hasOwnProperty(id)) continue;
+        var info = pages[id].imageinfo && pages[id].imageinfo[0];
+        if (!info || !info.thumburl || info.width < 2400 || info.width < info.height * 1.35) continue;
+        var meta = info.extmetadata || {};
+        list.push({url: info.thumburl, title: plain(meta.ObjectName && meta.ObjectName.value) || plain(pages[id].title.replace(/^File:|\.[a-z]+$/gi, '')),
+          by: plain(meta.Artist && meta.Artist.value)});
+      }
+      for (var i = list.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = list[i]; list[i] = list[j]; list[j] = t; }
+      if (list.length) store('scenery.' + theme, {at: Date.now(), list: list});
+      done(list.length ? list : (kept && kept.list) || []);
+    });
+  }
+
   // MARK: - Opening a title in its app (Watchmode: the title's page on each service, from its TMDB id)
 
   var WATCHMODE = 'https://api.watchmode.com/v1';
@@ -472,6 +507,19 @@ var Data = (function () {
 
   /** This hour's Recommended: rotates like the picks. */
   function nowRecommended() { return hourly(recommended, null); }
+
+  /** A whole tab (up to 20, one per franchise), starting at a different title each hour. */
+  var ROW_MAX = 20;
+  function row(source) {
+    if (!KEY) return [];
+    var list = source.filter(function (p) { return !p.detailed || (p.app && usable(p.app)); });
+    var hour = Math.floor(Date.now() / 3600000), out = [], seen = {};
+    for (var j = 0; j < list.length && out.length < ROW_MAX; j++) {
+      var q = list[(hour + j) % list.length], f = franchise(q.title);
+      if (!seen[f]) { seen[f] = true; out.push(q); }
+    }
+    return out;
+  }
 
   function hourly(source, kind) {
     var list = [];
@@ -720,8 +768,8 @@ var Data = (function () {
   function all() {
     var out = [], seen = {}, kinds = [null, 'hot', 'new', 'recommended'];
     for (var k = 0; k < kinds.length; k++) {
-      var list = kinds[k] === 'recommended' ? nowRecommended() : kinds[k] === null ? now(null)
-          : hourly(picks.filter(function (p) { return p.src === kinds[k]; }), null);
+      var list = kinds[k] === 'recommended' ? row(recommended) : kinds[k] === null ? now(null)
+          : row(picks.filter(function (p) { return p.src === kinds[k]; }));
       for (var i = 0; i < list.length; i++) if (!seen[keyOf(list[i])]) { seen[keyOf(list[i])] = true; out.push(list[i]); }
     }
     return out;
@@ -767,12 +815,12 @@ var Data = (function () {
     showcase: all,
     /** The home screen's tabs: 0 Trending (this week, on the TV's apps), 1 New (recent releases), 2 Recommended. */
     tab: function (i) {
-      if (i === 2) return nowRecommended();
       var src = i === 0 ? 'hot' : 'new';
-      return hourly(picks.filter(function (p) { return p.src === src; }), null);
+      return row(i === 2 ? recommended : picks.filter(function (p) { return p.src === src; }));
     },
     hasRecents: function () { return opened.length > 0; },
     findLink: findLink,
+    scenery: scenery,
     hasLinks: function () { return !!watchmodeKey(); },
     /** A title opened from the home screen: first in Recents, and a seed for Recommended. */
     noteOpened: function (p) {

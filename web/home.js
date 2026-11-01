@@ -352,9 +352,10 @@
     }
     // Apps opened lately join the shelf, and the shelf runs from the most recently opened.
     var used = usedTimes(), lately = apps.filter(function (a) { return used[a.id] && out.indexOf(a) < 0; });
-    out = byLastUsed(out.concat(lately)).slice(0, Math.max(out.length, FEW_APPS));
-    shelf = out;
-    others = byLastUsed(apps.filter(function (x) { return shelf.indexOf(x) < 0; }));
+    out = byLastUsed(out.concat(lately));
+    // Then every other app, so the shelf scrolls through them all.
+    shelf = out.concat(byLastUsed(apps.filter(function (x) { return out.indexOf(x) < 0; })));
+    others = byLastUsed(apps.slice());
   }
 
   // MARK: - Focus
@@ -835,8 +836,8 @@
         step: function (d) { cycle('theme', ['auto', 'light', 'dark'], theme, d); checkNight(); }},
       {label: tr('Dim'), value: dimName(),
         step: function (d) { cycle('dim', ['off', 'low', 'medium', 'high', 'auto'], Prefs.dim(), d); applyDim(); }},
-      {label: tr('Screensaver'), value: saverMode() === 'clock' ? tr('Clock') : tr('Photos'),
-        step: function (d) { cycle('saver', ['photos', 'clock'], saverMode(), d); }},
+      {label: tr('Screensaver'), value: saverName(saverMode()),
+        step: function (d) { cycle('saver', ['photos', 'landscapes', 'cities', 'nightsky', 'clock'], saverMode(), d); Data.scenery(saverMode(), function () {}); }},
       {label: tr('Picks per tab'), value: String(Prefs.cards()),
         step: function (d) { Prefs.set('cards', 3 + (Prefs.cards() - 3 + (d || 1) + 4) % 4); renderCards(); }},
       {label: tr('Cartoons and anime'), toggle: !Prefs.hideAnimation(),
@@ -1438,7 +1439,7 @@
     var tiles = $('tiles').children, cardNodes = $('cards').children;
     switch (st.zone) {
       case Z.SHELF:
-        if (dx) st.shelf = Math.max(0, Math.min(shelf.length - 1, st.shelf + dx));
+        if (dx && shelf.length) st.shelf = (st.shelf + dx + shelf.length) % shelf.length;   // a carousel: past the last, the first
         else if (dy > 0) { openDrawer(); return; }
         else if (dy < 0) {
           if (cards.length) { st.zone = Z.CARDS; st.card = nearest(cardNodes, centerX(tiles[st.shelf])); }
@@ -1446,7 +1447,7 @@
         }
         break;
       case Z.CARDS:
-        if (dx) st.card = Math.max(0, Math.min(cards.length - 1, st.card + dx));
+        if (dx && cards.length) st.card = (st.card + dx + cards.length) % cards.length;
         else if (dy < 0) { st.zone = Z.TOP; st.top = st.tab; }
         else if (shelf.length) { st.zone = Z.SHELF; st.shelf = nearest(tiles, centerX(cardNodes[st.card])); }
         break;
@@ -1562,6 +1563,11 @@
   /** "photos" (the picks' photos, as it always was) or "clock": what the screen shows when nobody touches it. */
   function saverMode() { return Prefs.saver(); }
 
+  function saverName(m) {
+    return m === 'clock' ? tr('Clock') : m === 'landscapes' ? tr('Landscapes') : m === 'cities' ? tr('Cities')
+      : m === 'nightsky' ? tr('Night Sky') : tr('Movies and shows');
+  }
+
   /** Dim, as the person picked it: off, low, medium, high, or automatic (medium from 22:00 to 07:00). */
   function dimName() {
     var v = Prefs.dim();
@@ -1586,8 +1592,23 @@
     return Data.showcase().filter(function (p) { return p.backdrop && Data.usable(p.app); });
   }
 
+  var sceneryList = [];
+
   function showSaver() {
-    var photos = saverPhotos();
+    var theme = saverMode() !== 'photos' && saverMode() !== 'clock' ? saverMode() : '';
+    if (theme && !sceneryList.length) {
+      // The theme's photos first (a day's list is kept, so this is quick after the first time).
+      Data.scenery(theme, function (list) {
+        if (saverOn || Date.now() - idleAt < SAVER_AFTER) return;   // someone pressed a key while the photos came
+        sceneryList = list;
+        if (list.length) startSaver(list, true); else startSaver(saverPhotos(), false);
+      });
+      return;
+    }
+    startSaver(theme ? sceneryList : saverPhotos(), !!theme);
+  }
+
+  function startSaver(photos, scene) {
     saverOn = true;
     saverPick = null;
     var s = $('saver');
@@ -1605,12 +1626,13 @@
       var p = photos.length ? photos[saverIndex++ % photos.length] : null;
       var back = front === a ? b : a;
       if (p) {
-        back.style.backgroundImage = 'url(' + Data.image(p.backdrop, 'original') + ')';
+        back.style.backgroundImage = 'url(' + (scene ? p.url : Data.image(p.backdrop, 'original')) + ')';
         back.style.webkitTransform = back.style.transform = 'scale(1.0)';
-        clock.children[2].textContent = p.title;
-        saverPick = p;
+        // Scenery is credited: its title and photographer (Wikimedia Commons, free licenses).
+        clock.children[2].textContent = scene ? p.title + (p.by ? ' · ' + p.by : '') : p.title;
+        saverPick = scene ? null : p;
         // With Watch from the screensaver on, OK opens this title's app (any other key only closes).
-        var target = Prefs.saverWatch() ? pickTarget(p) : null;
+        var target = !scene && Prefs.saverWatch() ? pickTarget(p) : null;
         hint.textContent = target ? trf('Press OK to watch on {app} · any other button to close', {app: target.app.title}) : '';
         setTimeout(function () {
           setClass(back, 'on', true);
@@ -1634,6 +1656,7 @@
 
   function hideSaver() {
     saverOn = false;
+    sceneryList = [];
     clearTimeout(saverTimer);
     setClass($('saver'), 'on', false);
   }
@@ -1801,7 +1824,7 @@
   I18N.set(Prefs.language());
   checkNight();   // now, from the last forecast: not after the TV lists its apps, with the day look until then
   // LG's screensaver waits only when ours will show: not under a sheet (ours waits there), and not without photos.
-  TV.holdScreenSaver(function () { return !sheetOpen() && (saverMode() === 'clock' || saverPhotos().length > 0); });
+  TV.holdScreenSaver(function () { return !sheetOpen() && (saverMode() !== 'photos' || saverPhotos().length > 0); });
   TV.registerInput && TV.registerInput();   // with Power On Screen = last input, the TV turns on into this
   watchHome();
   fit();
