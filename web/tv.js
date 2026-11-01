@@ -92,7 +92,7 @@ var TV = (function () {
     try { ws = new WebSocket('ws://127.0.0.1:3000'); } catch (e) { finish(null); return; }
     ws.onopen = function () {
       var payload = {forcePairing: false, pairingType: 'PROMPT',
-        manifest: {manifestVersion: 1, appVersion: '1.0', permissions: ['READ_INSTALLED_APPS']}};
+        manifest: {manifestVersion: 1, appVersion: '1.0', permissions: ['READ_INSTALLED_APPS', 'READ_RUNNING_APPS', 'LAUNCH']}};
       if (key) payload['client-key'] = key;
       ws.send(JSON.stringify({type: 'register', id: 'register', payload: payload}));
     };
@@ -577,6 +577,22 @@ var TV = (function () {
       if (!webos) { if (done) done(false); return; }
       luna('luna://com.webos.service.eim/addDevice', {appId: self, pigImage: '', mvpdIcon: ''}, function (res) {
         if (done) done(!!res);
+      });
+    },
+
+    /**
+     * LG: the service's watch that opens Free My TV again when an app is left for LG's home screen, and notes which
+     * apps came to the front (from anywhere). done({usage, on}) or null.
+     */
+    watchHome: function (enabled, done) {
+      if (!webos) { if (done) done(null); return; }
+      var key = null;
+      try { key = localStorage.getItem(SSAP_KEY); } catch (e) {}
+      luna('luna://' + self + '.service/watch', {appId: self, clientKey: key, enabled: enabled}, function (res) {
+        if (res && res.clientKey) {
+          try { localStorage.setItem(SSAP_KEY, res.clientKey); } catch (e) {}
+        }
+        if (done) done(res || null);
       });
     },
 

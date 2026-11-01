@@ -297,6 +297,25 @@
     try { localStorage.setItem(USED_KEY, JSON.stringify(u)); } catch (e) {}
   }
 
+  /** Apps the TV's watch saw in front, from anywhere (LG's own home too): the later time wins. */
+  function mergeUsed(seen) {
+    if (!seen) return false;
+    var u = usedTimes(), more = false;
+    for (var id in seen) {
+      if (seen.hasOwnProperty(id) && seen[id] > (u[id] || 0)) { u[id] = seen[id]; more = true; }
+    }
+    if (more) { try { localStorage.setItem(USED_KEY, JSON.stringify(u)); } catch (e) {} }
+    return more;
+  }
+
+  /** Back to Free My TV after leaving an app (Home Settings: After an app); the shelf learns what was opened. */
+  function watchHome() {
+    if (!TV.watchHome) return;
+    TV.watchHome(Prefs.afterApp() === 'here', function (res) {
+      if (res && mergeUsed(res.usage)) { pickShelf(); renderShelf(); updateFocus(); }
+    });
+  }
+
   /** Most recently opened first; apps never opened from here keep their order after them. */
   function byLastUsed(list) {
     var u = usedTimes();
@@ -842,6 +861,10 @@
       var open = Prefs.openPicks();
       rows.push({label: tr('Open picks in'), value: open === 'nuvio' ? 'Nuvio' : tr('Streaming apps'),
         step: function (d) { cycle('openPicks', ['apps', 'nuvio'], open, d); }});
+    }
+    if (TV.watchHome && TV.name === 'webos') {
+      rows.push({label: tr('After leaving an app'), value: Prefs.afterApp() === 'lg' ? tr('LG home screen') : tr('Back to Free My TV'),
+        step: function (d) { cycle('afterApp', ['here', 'lg'], Prefs.afterApp(), d); watchHome(); }});
     }
     rows.push({label: tr('Shelf'), value: '›', shelf: true, step: function (d) { if (d >= 0) openShelfEdit(); }});
     rows.push({label: tr('About this TV'), value: '›', about: true, step: function (d) { if (d >= 0) openAbout(); }});
@@ -1738,6 +1761,7 @@
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) { hideSaver(); hideAmbient(); return; }
     idleAt = Date.now();
+    watchHome();
     loadApps(function () { renderShelf(); renderDrawer(); updateFocus(); Data.refresh(); });
   });
 
@@ -1746,6 +1770,7 @@
   // LG's screensaver waits only when ours will show: not under a sheet (ours waits there), and not without photos.
   TV.holdScreenSaver(function () { return !sheetOpen() && (saverMode() === 'clock' || saverPhotos().length > 0); });
   TV.registerInput && TV.registerInput();   // with Power On Screen = last input, the TV turns on into this
+  watchHome();
   fit();
   renderTop();
   applyDim();

@@ -102,6 +102,8 @@ var Prefs = (function () {
       if (off) list.push(key);
       this.set('servicesOff', list);
     },
+    /** After leaving an app for LG's home screen: 'here' opens Free My TV again, 'lg' leaves LG's home. */
+    afterApp: function () { return pick('afterApp', 'here') === 'lg' ? 'lg' : 'here'; },
     openPicks: function () { return pick('openPicks', CONFIG.openPicksIn === 'nuvio' ? 'nuvio' : 'apps'); },
     set: function (name, value) { v[name] = value; save(); this.version++; },
     setCoin: function (i, on) {
