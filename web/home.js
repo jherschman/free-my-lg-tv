@@ -257,6 +257,23 @@
       var hex = '#' + ((1 << 24) | (logo.bg[0] << 16) | (logo.bg[1] << 8) | logo.bg[2]).toString(16).slice(1);
       paint(box, bg, darken(hex, 0.93));
     }
+    // Without a known brand color: the icon's own background, when it's a hue.
+    if (logo.bg && colorful(logo.bg)) setGlow(box, 'rgb(' + logo.bg.join(',') + ')');
+  }
+
+  /** The selected app's ring and glow: its brand's own color (Netflix red, Hulu green), bright enough to read. */
+  var ACCENT = {netflix: '#E50914', youtube: '#FF1A40', prime: '#1FA3FF', disney: '#3E7BFF', max: '#8457FF',
+    appletv: '#F5F5F7', hulu: '#1CE783', paramount: '#2D7DFF', peacock: '#F7C52B', nfl: '#4A7DFF', globoplay: '#FF6A2B',
+    jellyfin: '#AA5CC3', spotify: '#1ED760'};
+
+  function setGlow(box, color, sure) {
+    if (sure || !box.getAttribute('data-glow')) box.setAttribute('data-glow', color);
+  }
+
+  /** The glow for a focused tile, in its app's color (white when the app has none). */
+  function glow(box) {
+    var c = rgbOf(box.getAttribute('data-glow') || '#FFFFFF'), rgb = c.join(',');
+    return '0 0 0 3px rgba(' + rgb + ', 0.95), 0 0 44px 10px rgba(' + rgb + ', 0.5), 0 18px 40px rgba(0, 0, 0, 0.5)';
   }
 
   /** An app's face: its logo on its brand color (or its name, when the icon can't be read). */
@@ -265,6 +282,9 @@
     var top = k ? k[3][0] : app.color ? darken(app.color, 0.92) : '#2A2A2E';
     var bottom = k ? k[3][1] : app.color ? darken(app.color, 0.62) : '#161618';
     paint(box, top, bottom);
+    box.removeAttribute('data-glow');
+    if (k && ACCENT[k[0]]) setGlow(box, ACCENT[k[0]], true);
+    else if (app.color && colorful(rgbOf(app.color))) setGlow(box, app.color, true);
     var word = el('div', 'word', box, app.title);
     if (wordSize) word.style.fontSize = wordSize + 'px';
     if (app.icon) {
@@ -380,7 +400,11 @@
     list = $('cards').children;
     for (i = 0; i < list.length; i++) setClass(list[i], 'focus', st.zone === Z.CARDS && st.card === i);
     list = $('tiles').children;
-    for (i = 0; i < list.length; i++) setClass(list[i], 'focus', st.zone === Z.SHELF && st.shelf === i);
+    for (i = 0; i < list.length; i++) {
+      var on = st.zone === Z.SHELF && st.shelf === i;
+      setClass(list[i], 'focus', on);
+      list[i].style.boxShadow = on ? glow(list[i]) : '';
+    }
     revealShelf();
     list = document.querySelectorAll('#drawer .key');
     for (i = 0; i < list.length; i++) setClass(list[i], 'focus', st.zone === Z.DRAWER && st.drawer === i);
