@@ -596,6 +596,19 @@ var TV = (function () {
       });
     },
 
+    /** LG: the service's Nest side (the sign-in, a fresh token, the doorbell watch). done(result) or null. */
+    nest: function (payload, done) {
+      if (!webos) { if (done) done(null); return; }
+      luna('luna://' + self + '.service/nest', payload, done);
+    },
+
+    /** What the app was opened with (LG: Nest's sign-in from tools/nest_auth.py, a doorbell ring). */
+    launchParams: function () {
+      var p = null;
+      try { p = JSON.parse((window.PalmSystem && window.PalmSystem.launchParams) || '{}'); } catch (e) {}
+      return p || {};
+    },
+
     /** The antenna and HDMI inputs; `connected` when the TV says a device is on (when it tells). */
     inputs: function (done) {
       if (samsung) { samsungInputs(done); return; }

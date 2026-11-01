@@ -644,3 +644,11 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .flat .cell.focus .face { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4) !important; }
 .flat #home, .flat #drawer, .flat #cards, .flat .card, .flat #tiles, .flat .tile { will-change: transform; }
 .flat #top { will-change: opacity; }
+
+/* MARK: - Nest: a camera's live view over everything (the doorbell rang, or a camera picked in the drawer) */
+
+#camera { z-index: 6; background: #000; opacity: 0; visibility: hidden; -webkit-transition: opacity 0.3s, visibility 0s 0.3s; transition: opacity 0.3s, visibility 0s 0.3s; }
+#camera.on { opacity: 1; visibility: visible; -webkit-transition-delay: 0s; transition-delay: 0s; }
+#camera video { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: #000; object-fit: contain; }
+#camera .label { position: absolute; left: 64px; top: 48px; padding: 14px 26px; border-radius: 40px; background: rgba(0, 0, 0, 0.55); color: #FFF; font-size: 34px; font-weight: 600; }
+#camera .hint { position: absolute; left: 64px; bottom: 48px; padding: 12px 24px; border-radius: 30px; background: rgba(0, 0, 0, 0.55); color: rgba(255, 255, 255, 0.85); font-size: 26px; }

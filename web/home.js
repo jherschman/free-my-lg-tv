@@ -697,6 +697,10 @@
       drawerItems.push({label: x.label || tr('Live TV'), symbol: game ? 'gamepad' : x.symbol, off: !x.connected, run: launcher(x.id, x.label)});
     }
     drawerInputs = drawerItems.length;
+    var cams = Nest.cameras();
+    for (var c = 0; c < cams.length; c++) {
+      (function (cam) { drawerItems.push({label: cam.name, symbol: 'videocam', run: function () { openCamera(cam.id, '', false); }}); })(cams[c]);
+    }
     drawerItems.push({label: tr('All Apps'), symbol: 'apps', run: openApps});
     if (TV.name === 'webos') drawerItems.push({label: tr('Multi View'), symbol: 'recents', run: multiView});
     drawerItems.push({label: tr('Home Settings'), symbol: 'settings', run: openSettings});
@@ -1558,6 +1562,64 @@
     node.onclick = function () { node.onmouseover(); activate(); };
   }
 
+  // MARK: - Nest: a camera's live view
+
+  var cameraOn = false, cameraBack = '', cameraTimer = 0;
+
+  /** id: the camera; back: the app to return to (a ring brought us forward over it); rang: the doorbell rang. */
+  function openCamera(id, back, rang) {
+    var c = $('camera'), video = c.querySelector('video');
+    hideSaver();
+    hideAmbient();
+    cameraOn = true;
+    cameraBack = back || '';
+    c.querySelector('.label').textContent = (rang ? tr('Someone is at the door') + ' · ' : '') + (Nest.nameOf(id) || tr('Camera'));
+    c.querySelector('.hint').textContent = tr('Connecting…');
+    setClass(c, 'on', true);
+    Nest.live(id, video, function (err) {
+      if (!cameraOn) return;
+      c.querySelector('.hint').textContent = err
+        ? (Nest.signedOut() ? tr('Nest signed out: run nest_auth.py on your computer again.') : trf("Couldn't show the camera: {why}", {why: err.message || err}))
+        : (cameraBack ? tr('Back returns to what you were watching') : tr('Back closes'));
+    });
+    // A ring nobody answers on the TV: back to what was playing after 2 minutes.
+    clearTimeout(cameraTimer);
+    if (rang) cameraTimer = setTimeout(closeCamera, 120000);
+  }
+
+  function closeCamera() {
+    if (!cameraOn) return;
+    cameraOn = false;
+    clearTimeout(cameraTimer);
+    Nest.stop();
+    var c = $('camera'), video = c.querySelector('video');
+    setClass(c, 'on', false);
+    try { video.srcObject = null; } catch (e) {}
+    if (cameraBack) { var to = cameraBack; cameraBack = ''; TV.launch(to, null, function () {}); }
+  }
+
+  function refreshCameras() {
+    if (!Nest.configured()) return;
+    Nest.refresh(function () { renderDrawer(); });
+  }
+
+  /** Launch parameters: Nest's sign-in (from the computer) or a doorbell ring (from the service). */
+  var lastLaunch = '';
+
+  function handleLaunch(p) {
+    // The TV can hand the same parameters again on a later plain reopen: each is acted on once.
+    var same = JSON.stringify(p);
+    if (same === lastLaunch || same === '{}') return;
+    lastLaunch = same;
+    if (p.doorbell && p.at && Date.now() - p.at > 120000) return;   // an old ring
+    if (p.nestSetup) {
+      Nest.setup(p.nestSetup);
+      Nest.start(function () { refreshCameras(); });
+      toast(tr('Signed in to Nest. Your cameras are in the bottom row.'));
+    }
+    if (p.doorbell) openCamera(p.doorbell, p.prev || '', true);
+  }
+
   // MARK: - Toast
 
   var toastTimer = 0;
@@ -1739,6 +1801,11 @@
 
   document.addEventListener('keydown', function (e) {
     var k = e.keyCode;
+    if (cameraOn) {
+      if (k === TV.keys.back || k === 27 || k === 8 || k === TV.keys.ok) closeCamera();
+      e.preventDefault();
+      return;
+    }
     if (poke(k === TV.keys.ok)) { e.preventDefault(); return; }   // the first press only wakes the screen (or OK watches)
     if (typing(k)) return;
     if (k === TV.keys.left) move(-1, 0);
@@ -1831,6 +1898,9 @@
   function reopened() {
     // LG: with handlesRelaunch the app has to come to the front itself, or opening it again while it runs shows nothing.
     if (window.PalmSystem && window.PalmSystem.activate) window.PalmSystem.activate();
+    var params = TV.launchParams ? TV.launchParams() : {};
+    if ((params.doorbell || params.nestSetup) && JSON.stringify(params) !== lastLaunch) { handleLaunch(params); return; }   // over whatever was showing
+    if (cameraOn) closeCamera();
     reset();
     loadApps(function () { renderShelf(); renderDrawer(); restInDrawer(); Data.refresh(); });
   }
@@ -1859,12 +1929,14 @@
     renderAll();
     restInDrawer();
     Data.refresh();
+    Nest.start(function () { refreshCameras(); });
+    if (TV.launchParams) handleLaunch(TV.launchParams());
   });
   setInterval(function () {
     checkNight();
     Data.refresh();
     applyDim();   // automatic: medium from 22:00, off again at 07:00
-    if (!saverOn && !ambientOn && !sheetOpen() && Date.now() - idleAt > SAVER_AFTER) {
+    if (!saverOn && !ambientOn && !cameraOn && !sheetOpen() && Date.now() - idleAt > SAVER_AFTER) {
       if (saverMode() === 'clock') showAmbient(); else showSaver();
     }
     if (saverOn) tickSaverClock($('saver').querySelector('.clock'));
@@ -1873,5 +1945,5 @@
 
   // For the browser preview and tests.
   window.FreeMyTV = {state: st, move: move, activate: activate, back: back, showSaver: showSaver, hideSaver: hideSaver, toast: toast,
-    showAmbient: showAmbient, hideAmbient: hideAmbient, applyDim: applyDim};
+    showAmbient: showAmbient, hideAmbient: hideAmbient, applyDim: applyDim, openCamera: openCamera, closeCamera: closeCamera};
 })();

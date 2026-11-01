@@ -214,3 +214,113 @@ service.register('watch', function (message) {
   watch();
   message.respond({returnValue: true, clientKey: watcher.key, usage: watcher.usage, on: watcher.on});
 });
+
+/*
+ * Nest (Google's Smart Device Management): the person's own Device Access project, signed in on their computer with
+ * tools/nest_auth.py, which hands the refresh token to the app; the app passes it here. While the TV is on, this
+ * pulls the project's Pub/Sub subscription for doorbell rings and brings Free My TV forward with the doorbell's live
+ * view. Tokens stay in memory here and in the app's own storage; nothing is logged.
+ */
+var https = require('https');
+var nest = {config: null, token: '', expires: 0, pulling: false, refused: false, retry: null};
+
+function post(host, path, body, headers, done) {
+  var data = typeof body === 'string' ? body : JSON.stringify(body);
+  headers = headers || {};
+  headers['Content-Length'] = Buffer.byteLength(data);
+  var req = https.request({host: host, path: path, method: 'POST', headers: headers}, function (res) {
+    var text = '';
+    res.setEncoding('utf8');
+    res.on('data', function (c) { text += c; });
+    res.on('end', function () {
+      var json = null;
+      try { json = JSON.parse(text); } catch (e) {}
+      done(res.statusCode >= 200 && res.statusCode < 300 ? null : new Error('HTTP ' + res.statusCode), json);
+    });
+  });
+  req.setTimeout(70000, function () { req.abort(); });
+  req.on('error', function (e) { done(e, null); });
+  req.write(data);
+  req.end();
+}
+
+/** A fresh access token (refreshed a minute before it runs out): done(err, token). */
+function nestToken(done) {
+  var c = nest.config;
+  if (!c) { done(new Error('not set up')); return; }
+  if (nest.token && Date.now() < nest.expires - 60000) { done(null, nest.token); return; }
+  var form = 'grant_type=refresh_token&client_id=' + encodeURIComponent(c.clientId) + '&client_secret=' +
+      encodeURIComponent(c.clientSecret) + '&refresh_token=' + encodeURIComponent(c.refreshToken);
+  post('oauth2.googleapis.com', '/token', form, {'Content-Type': 'application/x-www-form-urlencoded'}, function (err, res) {
+    if (err || !res || !res.access_token) {
+      if (res && res.error === 'invalid_grant') nest.refused = true;   // signed out (7 days in Testing): sign in again
+      done(err || new Error('no token'));
+      return;
+    }
+    nest.refused = false;
+    nest.token = res.access_token;
+    nest.expires = Date.now() + (res.expires_in || 3600) * 1000;
+    done(null, nest.token);
+  });
+}
+
+/** Free My TV to the front, on the doorbell's live view; Back there returns to what was playing. */
+function openDoorbell(device) {
+  var params = {doorbell: device, at: Date.now(), prev: watcher.last && !LG_HOME.test(watcher.last) && watcher.last !== watcher.app ? watcher.last : ''};
+  if (watcher.socket) {
+    watcher.socket.write(frame(JSON.stringify({type: 'request', id: 'ring', uri: 'ssap://system.launcher/launch',
+      payload: {id: watcher.app || 'io.freemytv', params: params}})));
+  } else {
+    service.call('luna://com.webos.applicationManager/launch', {id: watcher.app || 'io.freemytv', params: params}, function () {});
+  }
+}
+
+function pullNest() {
+  if (!nest.config || nest.pulling || nest.refused) return;
+  nest.pulling = true;
+  function again(ms) {
+    nest.pulling = false;
+    clearTimeout(nest.retry);
+    nest.retry = setTimeout(pullNest, ms);
+  }
+  nestToken(function (err, token) {
+    if (err) { again(nest.refused ? 3600000 : 30000); return; }
+    var c = nest.config, path = '/v1/' + c.subscription + ':pull';
+    post('pubsub.googleapis.com', path, {maxMessages: 10}, {'Content-Type': 'application/json', Authorization: 'Bearer ' + token},
+      function (err2, res) {
+        if (err2) { again(15000); return; }
+        var msgs = (res && res.receivedMessages) || [], ack = [];
+        for (var i = 0; i < msgs.length; i++) {
+          ack.push(msgs[i].ackId);
+          var ev = null;
+          try { ev = JSON.parse((Buffer.from ? Buffer.from(msgs[i].message.data, 'base64') : new Buffer(msgs[i].message.data, 'base64')).toString('utf8')); } catch (e) {}
+          var up = ev && ev.resourceUpdate, events = up && up.events;
+          // Only a ring from the last minute: events kept while the TV was off aren't shown hours later.
+          if (events && events['sdm.devices.events.DoorbellChime.Chime'] && Date.now() - Date.parse(ev.timestamp) < 60000) {
+            openDoorbell(up.name);
+          }
+        }
+        if (ack.length) {
+          post('pubsub.googleapis.com', '/v1/' + c.subscription + ':acknowledge', {ackIds: ack},
+            {'Content-Type': 'application/json', Authorization: 'Bearer ' + token}, function () {});
+        }
+        again(msgs.length ? 0 : 1000);
+      });
+  });
+}
+
+/** The app hands its saved Nest settings over at every start; answers with a fresh access token for the live views. */
+service.register('nest', function (message) {
+  var p = message.payload || {};
+  if (p.config && p.config.refreshToken && p.config.subscription) {
+    var changed = !nest.config || nest.config.refreshToken !== p.config.refreshToken;
+    nest.config = p.config;
+    if (changed) { nest.token = ''; nest.refused = false; }
+    hold();
+    pullNest();
+  }
+  if (!p.token) { message.respond({returnValue: true, ready: !!nest.config, signedOut: nest.refused}); return; }
+  nestToken(function (err, token) {
+    message.respond({returnValue: !err, token: token || '', signedOut: nest.refused, errorText: err ? err.message : ''});
+  });
+});
