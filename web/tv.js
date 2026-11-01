@@ -568,6 +568,18 @@ var TV = (function () {
       });
     },
 
+    /**
+     * LG: lists this app among the TV's inputs (eim addDevice; appinfo.json has supportGIP and a largeIcon), so with
+     * Power On Screen set to the last input the TV turns on into it. Again at every start: the list doesn't survive
+     * every update. done(ok).
+     */
+    registerInput: function (done) {
+      if (!webos) { if (done) done(false); return; }
+      luna('luna://com.webos.service.eim/addDevice', {appId: self, pigImage: '', mvpdIcon: ''}, function (res) {
+        if (done) done(!!res);
+      });
+    },
+
     /** The antenna and HDMI inputs; `connected` when the TV says a device is on (when it tells). */
     inputs: function (done) {
       if (samsung) { samsungInputs(done); return; }

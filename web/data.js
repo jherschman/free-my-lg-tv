@@ -392,9 +392,14 @@ var Data = (function () {
 
   var cache = stored('recs') || {};
   var picks = cache.picks || [], listAt = cache.listAt || 0, period = cache.period, listLang = cache.lang || '', stamp = cache.stamp || '';
+  /** Recommended tab: the best rated on the TV's apps, and TMDB's recommendations for titles opened from here. */
+  var recommended = cache.recommended || [];
+  /** Recents tab: titles opened from the home screen, newest first (the streaming apps don't share what's watched). */
+  var opened = stored('opened') || [];
+  var OPENED_MAX = 12;
   var fetchingRecs = false, failedAt = 0, recsError = '';
 
-  function saveRecs() { store('recs', {picks: picks, listAt: listAt, period: period, lang: listLang, stamp: stamp}); }
+  function saveRecs() { store('recs', {picks: picks, recommended: recommended, listAt: listAt, period: period, lang: listLang, stamp: stamp}); }
 
   function hourPeriod(d) {
     var h = d.getHours();
@@ -414,11 +419,16 @@ var Data = (function () {
   }
 
   /** This hour's picks (Prefs.cards()): movies ("movie"), shows ("tv") or both (null). */
-  function now(kind) {
+  function now(kind) { return hourly(picks, kind); }
+
+  /** This hour's Recommended: rotates like the picks. */
+  function nowRecommended() { return hourly(recommended, null); }
+
+  function hourly(source, kind) {
     var list = [];
     if (!KEY) return list;
-    for (var i = 0; i < picks.length; i++) {
-      var p = picks[i];
+    for (var i = 0; i < source.length; i++) {
+      var p = source[i];
       if ((kind === null || kind === p.kind) && (!p.detailed || (p.app && usable(p.app)))) list.push(p);
     }
     if (!list.length) return list;
@@ -582,8 +592,39 @@ var Data = (function () {
             alternate(list, seen, fresh.movie, fresh.tv, 24);
             if (!list.length) { done(new Error('TMDB returned no recommendations')); return; }
             picks = list;
-            done(null);
+            fetchRecommended(common, function () { done(null); });
           });
+        });
+      });
+    });
+  }
+
+  /**
+   * Recommended: TMDB's recommendations for the last titles opened from here (what the person chose), then the best
+   * rated of the last few years on the TV's apps. Details (and so the app it's on) come lazily, as for the picks.
+   */
+  function fetchRecommended(common, done) {
+    var mine = [], best = {movie: [], tv: []}, seen = {};
+    for (var i = 0; i < opened.length; i++) seen[keyOf(opened[i])] = true;   // not what they've just opened
+    var seeds = opened.slice(0, 3);
+    each(seeds, function (o, next) {
+      tmdb('/' + o.kind + '/' + o.id + '/recommendations?language=' + lang(), function (e, r) {
+        for (var j = 0; !e && r && r.results && j < r.results.length && j < 8; j++) addPick(mine, r.results[j], o.kind);
+        next();
+      });
+    }, function () {
+      var rated = common.replace('sort_by=popularity.desc', 'sort_by=vote_average.desc');
+      tmdb('/discover/movie?vote_count.gte=1500&primary_release_date.gte=' + day(-365 * 5) + rated, function (e1, r1) {
+        for (var j = 0; !e1 && j < r1.results.length; j++) addPick(best.movie, r1.results[j], 'movie');
+        tmdb('/discover/tv?vote_count.gte=400&first_air_date.gte=' + day(-365 * 5) + rated, function (e2, r2) {
+          for (var k = 0; !e2 && k < r2.results.length; k++) addPick(best.tv, r2.results[k], 'tv');
+          var list = [];
+          for (var m = 0; m < mine.length && list.length < 12; m++) {
+            if (!seen[keyOf(mine[m])]) { seen[keyOf(mine[m])] = true; list.push(mine[m]); }
+          }
+          alternate(list, seen, best.movie, best.tv, 24);
+          if (list.length) recommended = list;
+          done();
         });
       });
     });
@@ -594,7 +635,7 @@ var Data = (function () {
     if (!KEY || fetchingRecs || !installed.length) return;
     var t = Date.now(), p = hourPeriod(new Date()), st = sourceStamp();
     if (st === stamp && failedAt && t - failedAt < 10 * 60000 && t >= failedAt) return;
-    var stale = st !== stamp || p !== period || t - listAt > 6 * 3600000 || t < listAt || !picks.length || listLang !== I18N.lang;
+    var stale = st !== stamp || p !== period || t - listAt > 6 * 3600000 || t < listAt || !picks.length || !recommended.length || listLang !== I18N.lang;
     var wanted = all(), missing = false;
     for (var i = 0; i < wanted.length; i++) missing = missing || !wanted[i].detailed;
     if (!stale && !missing) return;
@@ -625,9 +666,9 @@ var Data = (function () {
 
   /** This hour's picks for the three tabs, without repeats (the screensaver shows them too). */
   function all() {
-    var out = [], seen = {}, kinds = [null, 'movie', 'tv'];
+    var out = [], seen = {}, kinds = [null, 'movie', 'tv', 'recommended'];
     for (var k = 0; k < kinds.length; k++) {
-      var list = now(kinds[k]);
+      var list = kinds[k] === 'recommended' ? nowRecommended() : now(kinds[k]);
       for (var i = 0; i < list.length; i++) if (!seen[keyOf(list[i])]) { seen[keyOf(list[i])] = true; out.push(list[i]); }
     }
     return out;
@@ -671,6 +712,24 @@ var Data = (function () {
     recsError: function () { return recsError; },
     picks: now,
     showcase: all,
+    /** The home screen's tabs: 0 Recents, 1 Explore, 2 Recommended. */
+    tab: function (i) {
+      if (i === 0) return opened.filter(function (p) { return !p.app || usable(p.app); }).slice(0, 6);
+      if (i === 2) return nowRecommended();
+      return now(null);
+    },
+    hasRecents: function () { return opened.length > 0; },
+    /** A title opened from the home screen: first in Recents, and a seed for Recommended. */
+    noteOpened: function (p) {
+      if (!p) return;
+      var k = keyOf(p);
+      opened = opened.filter(function (x) { return keyOf(x) !== k; });
+      opened.unshift({id: p.id, kind: p.kind, title: p.title, backdrop: p.backdrop, poster: p.poster || '', meta: p.meta || '',
+        app: p.app, service: p.service, detailed: true, at: Date.now()});
+      if (opened.length > OPENED_MAX) opened.length = OPENED_MAX;
+      store('opened', opened);
+      changed();
+    },
     image: function (path, size) { return path ? 'https://image.tmdb.org/t/p/' + (size || 'w1280') + path : ''; },
 
     /** Night at the location: from sunset to sunrise (the last forecast; without one, 6:00 and 18:00). */

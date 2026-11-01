@@ -288,6 +288,23 @@
   /** shelf_apps in config.properties: the shelf in that order, by id or name (part of it). */
   var WANTED = (CONFIG.shelfApps || []).map(function (s) { return s.toLowerCase(); });
 
+  /** When each app was last opened from here (LG doesn't tell an app what was opened from its own home screen). */
+  var USED_KEY = 'fmtv.lastUsed';
+  function usedTimes() { try { return JSON.parse(localStorage.getItem(USED_KEY)) || {}; } catch (e) { return {}; } }
+  function noteUsed(id) {
+    var u = usedTimes();
+    u[id] = Date.now();
+    try { localStorage.setItem(USED_KEY, JSON.stringify(u)); } catch (e) {}
+  }
+
+  /** Most recently opened first; apps never opened from here keep their order after them. */
+  function byLastUsed(list) {
+    var u = usedTimes();
+    return list.map(function (a, i) { return {a: a, i: i}; }).sort(function (x, y) {
+      return (u[y.a.id] || 0) - (u[x.a.id] || 0) || x.i - y.i;
+    }).map(function (x) { return x.a; });
+  }
+
   function pickShelf() {
     if (WANTED.length && Prefs.shelfConfig() !== WANTED.join(',')) {
       Prefs.set('shelf', null);
@@ -314,14 +331,17 @@
       }
       if (!out.length) out = apps.slice(0, FEW_APPS);
     }
+    // Apps opened lately join the shelf, and the shelf runs from the most recently opened.
+    var used = usedTimes(), lately = apps.filter(function (a) { return used[a.id] && out.indexOf(a) < 0; });
+    out = byLastUsed(out.concat(lately)).slice(0, Math.max(out.length, FEW_APPS));
     shelf = out;
-    others = apps.filter(function (x) { return shelf.indexOf(x) < 0; });
+    others = byLastUsed(apps.filter(function (x) { return shelf.indexOf(x) < 0; }));
   }
 
   // MARK: - Focus
 
   var Z = {TOP: 'top', CARDS: 'cards', SHELF: 'shelf', DRAWER: 'drawer', APPS: 'apps', SETTINGS: 'settings', EDIT: 'edit', LANG: 'lang', CITY: 'city', KEY: 'key', ABOUT: 'about'};
-  var st = {zone: Z.SHELF, top: 0, tab: 0, card: 0, shelf: 0, drawer: 0, grid: 0, row: 0, edit: 0, lang: 0, city: 0, key: 0};
+  var st = {zone: Z.SHELF, top: 0, tab: Data.hasRecents() ? 0 : 1, card: 0, shelf: 0, drawer: 0, grid: 0, row: 0, edit: 0, lang: 0, city: 0, key: 0};
   var cards = [];
 
   function sheetOpen() { return st.zone === Z.APPS || st.zone === Z.SETTINGS || st.zone === Z.EDIT || st.zone === Z.LANG || st.zone === Z.CITY || st.zone === Z.KEY || st.zone === Z.ABOUT; }
@@ -384,13 +404,11 @@
 
   // MARK: - Top: title, tabs, buttons, quotes
 
-  var TAB_KIND = [null, 'movie', 'tv'];
-
   function renderTop() {
     $('title').textContent = tr('For You');
     var tabs = $('tabs');
     tabs.innerHTML = '';
-    var names = [tr('Explore'), tr('Movies'), tr('Shows')];
+    var names = [tr('Recents'), tr('Explore'), tr('Recommended')];
     for (var i = 0; i < 3; i++) {
       var t = el('button', 'tab', tabs, names[i]);
       hover(t, Z.TOP, i);
@@ -420,9 +438,13 @@
   // MARK: - Picks and background
 
   function renderCards() {
-    var list = Data.picks(TAB_KIND[st.tab]);
+    var list = Data.tab(st.tab);
     var holder = $('cards');
     setClass(body, 'no-picks', !list.length);
+    // Recents before anything was opened from here: say how it fills, under the clock.
+    var hint = st.tab === 0 && !list.length && Data.hasKey();
+    setClass(body, 'recents-empty', hint);
+    $('hint').textContent = hint ? tr('Movies and shows you open from Explore or Recommended show up here.') : '';
     setClass(body, 'no-key', !Data.hasKey());   // as on Android: no title or tabs that could never show anything
     if (!Data.hasKey() && st.zone === Z.TOP && st.top < 3) st.top = 3;
     var same = list.length === cards.length;
@@ -472,9 +494,28 @@
   var bgUrl = null, bgFront = 'bgA';
 
   /** The focused pick's photo as the background: drawn tiny and stretched, it's already as soft as a heavy blur. */
+  var heroFront = 'heroA';
+
+  /** The focused pick's photo, full-bleed and sharp behind the top of the screen, as on Apple TV. */
+  function hero(url) {
+    var next = heroFront === 'heroA' ? 'heroB' : 'heroA';
+    if (!url) { setClass($('heroA'), 'on', false); setClass($('heroB'), 'on', false); setClass(body, 'has-hero', false); return; }
+    var img = new Image();
+    img.onload = function () {
+      if (bgUrl !== url) return;
+      $(next).style.backgroundImage = 'url(' + img.src + ')';
+      setClass($(next), 'on', true);
+      setClass($(heroFront), 'on', false);
+      setClass(body, 'has-hero', true);
+      heroFront = next;
+    };
+    img.src = url.replace('/w300/', '/w1280/');
+  }
+
   function backdrop(url) {
     if (url === bgUrl) return;
     bgUrl = url;
+    hero(url);
     var next = bgFront === 'bgA' ? 'bgB' : 'bgA';
     if (!url) {
       setClass($('bgA'), 'on', false);
@@ -1265,6 +1306,7 @@
   function launcher(id, name, params) {
     return function () {
       TV.launch(id, params || null, function (ok) {
+        if (ok) noteUsed(id);
         if (!ok) toast(trf("Couldn't open {app}.", {app: name || id}));
       });
     };
@@ -1291,7 +1333,7 @@
         return;
       case Z.CARDS:
         var target = pickTarget(cards[st.card]);
-        if (target) launcher(target.app.id, target.app.title, target.params)();
+        if (target) { Data.noteOpened(cards[st.card]); launcher(target.app.id, target.app.title, target.params)(); }
         return;
       case Z.SHELF:
         if (shelf[st.shelf]) launcher(shelf[st.shelf].id, shelf[st.shelf].title)();
@@ -1663,7 +1705,7 @@
     st.zone = Z.SHELF;
     st.shelf = 0;
     st.card = 0;
-    selectTab(0);
+    selectTab(Data.hasRecents() ? 0 : 1);
     updateFocus();
     restInDrawer();   // drawer_first: out again at once, not only after the TV lists its apps
   }
@@ -1703,6 +1745,7 @@
   checkNight();   // now, from the last forecast: not after the TV lists its apps, with the day look until then
   // LG's screensaver waits only when ours will show: not under a sheet (ours waits there), and not without photos.
   TV.holdScreenSaver(function () { return !sheetOpen() && (saverMode() === 'clock' || saverPhotos().length > 0); });
+  TV.registerInput && TV.registerInput();   // with Power On Screen = last input, the TV turns on into this
   fit();
   renderTop();
   applyDim();
