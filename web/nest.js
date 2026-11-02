@@ -7,7 +7,7 @@ var Nest = (function () {
   'use strict';
 
   var KEY = 'fmtv.nest', API = 'https://smartdevicemanagement.googleapis.com/v1/';
-  var config = null, cameras = [], pc = null, session = null, device = null, extendTimer = 0, signedOut = false;
+  var config = null, cameras = [], thermostats = [], pc = null, session = null, device = null, extendTimer = 0, signedOut = false;
   try { config = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
 
   function setup(c) {
@@ -20,7 +20,7 @@ var Nest = (function () {
   /** Hands the saved sign-in to the service, which then watches for rings while the TV is on. */
   function start(done) {
     if (!config || !TV.nest) { if (done) done(false); return; }
-    TV.nest({config: config}, function (res) {
+    TV.nest({config: config, mode: Prefs.doorbell()}, function (res) {
       signedOut = !!(res && res.signedOut);
       if (done) done(!!res);
     });
@@ -58,17 +58,44 @@ var Nest = (function () {
     if (!config) { done([]); return; }
     api('GET', 'enterprises/' + config.project + '/devices', null, function (err, res) {
       if (err) { done(cameras); return; }
-      var list = [], devices = (res && res.devices) || [];
+      var list = [], devices = (res && res.devices) || [], temps = [];
       for (var i = 0; i < devices.length; i++) {
         var d = devices[i], traits = d.traits || {}, live = traits['sdm.devices.traits.CameraLiveStream'];
+        if (/THERMOSTAT/.test(d.type || '')) temps.push(thermostat(d));
         if (!live || (live.supportedProtocols || []).indexOf('WEB_RTC') < 0) continue;
         var info = traits['sdm.devices.traits.Info'] || {}, room = d.parentRelations && d.parentRelations[0];
         list.push({id: d.name, name: info.customName || (room && room.displayName) || 'Camera', doorbell: /DOORBELL/.test(d.type || '')});
       }
       list.sort(function (a, b) { return (b.doorbell ? 1 : 0) - (a.doorbell ? 1 : 0); });
       cameras = list;
+      thermostats = temps;
       done(list);
     });
+  }
+
+  /** A thermostat as the screen shows it: {id, name, now, mode (HEAT, COOL, HEATCOOL, OFF), eco, heat, cool} in °C. */
+  function thermostat(d) {
+    var t = d.traits || {}, info = t['sdm.devices.traits.Info'] || {}, room = d.parentRelations && d.parentRelations[0];
+    var sp = t['sdm.devices.traits.ThermostatTemperatureSetpoint'] || {};
+    return {id: d.name, name: info.customName || (room && room.displayName) || 'Thermostat',
+      now: (t['sdm.devices.traits.Temperature'] || {}).ambientTemperatureCelsius,
+      mode: (t['sdm.devices.traits.ThermostatMode'] || {}).mode || 'OFF',
+      eco: (t['sdm.devices.traits.ThermostatEco'] || {}).mode === 'MANUAL_ECO',
+      heat: sp.heatCelsius, cool: sp.coolCelsius};
+  }
+
+  /** Moves a thermostat's target (HEAT or COOL; in HEATCOOL both, keeping their gap) to the given °C: done(err). */
+  function setTarget(th, celsius, done) {
+    var c = Math.round(celsius * 2) / 2, cmd = 'sdm.devices.commands.ThermostatTemperatureSetpoint.', body;
+    if (th.mode === 'HEAT') { body = {command: cmd + 'SetHeat', params: {heatCelsius: c}}; th.heat = c; }
+    else if (th.mode === 'COOL') { body = {command: cmd + 'SetCool', params: {coolCelsius: c}}; th.cool = c; }
+    else if (th.mode === 'HEATCOOL') {
+      var gap = (th.cool || c + 2) - (th.heat || c);
+      body = {command: cmd + 'SetRange', params: {heatCelsius: c, coolCelsius: c + gap}};
+      th.heat = c;
+      th.cool = c + gap;
+    } else { done(new Error('off')); return; }
+    api('POST', th.id + ':executeCommand', body, function (err) { done(err); });
   }
 
   function command(id, name, params, done) {
@@ -123,6 +150,8 @@ var Nest = (function () {
     start: start,
     refresh: refresh,
     cameras: function () { return cameras; },
+    thermostats: function () { return thermostats; },
+    setTarget: setTarget,
     nameOf: function (id) { for (var i = 0; i < cameras.length; i++) if (cameras[i].id === id) return cameras[i].name; return ''; },
     live: live,
     stop: stop

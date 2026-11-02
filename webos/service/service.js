@@ -10,7 +10,7 @@ var Service = require('webos-service');
 var service = new Service(require('./package.json').name);
 
 /** What the TV's remote control API is asked for: the app list, what's in front, and opening Free My TV again. */
-var PERMISSIONS = ['READ_INSTALLED_APPS', 'READ_RUNNING_APPS', 'LAUNCH'];
+var PERMISSIONS = ['READ_INSTALLED_APPS', 'READ_RUNNING_APPS', 'LAUNCH', 'WRITE_NOTIFICATION_TOAST'];
 
 function buffer(x) {   // Buffer.from is missing before Node 4.5
   return Buffer.from ? Buffer.from(x) : new Buffer(x);
@@ -144,6 +144,11 @@ function watch() {
       registered = true;
       watcher.key = m.payload['client-key'];
       send({type: 'subscribe', id: 'front', uri: 'ssap://com.webos.applicationManager/getForegroundAppInfo'});
+    } else if (m.id === 'toast' && m.type === 'error' && nest.ringing) {
+      openDoorbell(nest.ringing);
+      nest.ringing = '';
+    } else if (m.id === 'toast') {
+      nest.ringing = '';
     } else if (m.id === 'front' && m.payload) {
       var id = m.payload.appId || '';
       if (!id) return;
@@ -222,7 +227,7 @@ service.register('watch', function (message) {
  * view. Tokens stay in memory here and in the app's own storage; nothing is logged.
  */
 var https = require('https');
-var nest = {config: null, token: '', expires: 0, pulling: false, refused: false, retry: null};
+var nest = {config: null, token: '', expires: 0, pulling: false, refused: false, retry: null, mode: 'popup', ringing: ''};
 
 function post(host, path, body, headers, done) {
   var data = typeof body === 'string' ? body : JSON.stringify(body);
@@ -264,6 +269,18 @@ function nestToken(done) {
   });
 }
 
+/**
+ * A ring: a notification over what's playing ("popup", the default; selecting it opens the live view), or the live
+ * view at once ("full"). Where the TV refuses the notification, the live view opens.
+ */
+function ring(device) {
+  if (nest.mode === 'full' || !watcher.socket || watcher.last === watcher.app) { openDoorbell(device); return; }
+  nest.ringing = device;
+  watcher.socket.write(frame(JSON.stringify({type: 'request', id: 'toast', uri: 'ssap://system.notifications/createToast',
+    payload: {message: 'Doorbell: someone is at the door. Select to see the camera.', onClick: {appId: watcher.app,
+      params: {doorbell: device, at: Date.now(), prev: watcher.last && !LG_HOME.test(watcher.last) ? watcher.last : ''}}}})));
+}
+
 /** Free My TV to the front, on the doorbell's live view; Back there returns to what was playing. */
 function openDoorbell(device) {
   var params = {doorbell: device, at: Date.now(), prev: watcher.last && !LG_HOME.test(watcher.last) && watcher.last !== watcher.app ? watcher.last : ''};
@@ -297,7 +314,7 @@ function pullNest() {
           var up = ev && ev.resourceUpdate, events = up && up.events;
           // Only a ring from the last minute: events kept while the TV was off aren't shown hours later.
           if (events && events['sdm.devices.events.DoorbellChime.Chime'] && Date.now() - Date.parse(ev.timestamp) < 60000) {
-            openDoorbell(up.name);
+            ring(up.name);
           }
         }
         if (ack.length) {
@@ -312,6 +329,7 @@ function pullNest() {
 /** The app hands its saved Nest settings over at every start; answers with a fresh access token for the live views. */
 service.register('nest', function (message) {
   var p = message.payload || {};
+  if (p.mode) nest.mode = p.mode === 'full' ? 'full' : 'popup';
   if (p.config && p.config.refreshToken && p.config.subscription) {
     var changed = !nest.config || nest.config.refreshToken !== p.config.refreshToken;
     nest.config = p.config;

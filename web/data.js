@@ -103,6 +103,8 @@ var Prefs = (function () {
       this.set('servicesOff', list);
     },
     /** After leaving an app for LG's home screen: 'here' opens Free My TV again, 'lg' leaves LG's home. */
+    /** A doorbell ring: 'popup' (a notification over what's playing) or 'full' (the live view at once). */
+    doorbell: function () { return pick('doorbell', 'popup') === 'full' ? 'full' : 'popup'; },
     afterApp: function () { return pick('afterApp', 'here') === 'lg' ? 'lg' : 'here'; },
     openPicks: function () { return pick('openPicks', CONFIG.openPicksIn === 'nuvio' ? 'nuvio' : 'apps'); },
     set: function (name, value) { v[name] = value; save(); this.version++; },

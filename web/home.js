@@ -697,6 +697,13 @@
       drawerItems.push({label: x.label || tr('Live TV'), symbol: game ? 'gamepad' : x.symbol, off: !x.connected, run: launcher(x.id, x.label)});
     }
     drawerInputs = drawerItems.length;
+    var temps = Nest.thermostats();
+    for (var t = 0; t < temps.length; t++) {
+      (function (th) {
+        drawerItems.push({label: th.name + (th.now !== undefined ? ' · ' + Data.degrees(th.now) : ''), symbol: 'thermostat',
+          run: function () { openThermo(th); }});
+      })(temps[t]);
+    }
     var cams = Nest.cameras();
     for (var c = 0; c < cams.length; c++) {
       (function (cam) { drawerItems.push({label: cam.name, symbol: 'videocam', run: function () { openCamera(cam.id, '', false); }}); })(cams[c]);
@@ -908,6 +915,10 @@
       var open = Prefs.openPicks();
       rows.push({label: tr('Open picks in'), value: open === 'nuvio' ? 'Nuvio' : tr('Streaming apps'),
         step: function (d) { cycle('openPicks', ['apps', 'nuvio'], open, d); }});
+    }
+    if (Nest.configured()) {
+      rows.push({label: tr('Doorbell'), value: Prefs.doorbell() === 'full' ? tr('Full screen') : tr('Pop-up over what\'s playing'),
+        step: function (d) { cycle('doorbell', ['popup', 'full'], Prefs.doorbell(), d); Nest.start(); }});
     }
     if (TV.watchHome && TV.name === 'webos') {
       rows.push({label: tr('After leaving an app'), value: Prefs.afterApp() === 'lg' ? tr('LG home screen') : tr('Back to Free My TV'),
@@ -1603,6 +1614,49 @@
     Nest.refresh(function () { renderDrawer(); });
   }
 
+  // MARK: - Nest thermostat
+
+  var thermo = null, thermoTarget = 0, thermoTimer = 0;
+
+  function fahrenheit() { var u = Prefs.temperature(); return u === 'F' || (u === 'auto' && Place.fahrenheit); }
+  function toShown(c) { return fahrenheit() ? Math.round(c * 9 / 5 + 32) : Math.round(c * 2) / 2; }
+  function toCelsius(v) { return fahrenheit() ? (v - 32) * 5 / 9 : v; }
+
+  function openThermo(th) {
+    thermo = th;
+    var c = th.mode === 'COOL' ? th.cool : th.heat;
+    thermoTarget = c === undefined ? 0 : toShown(c);
+    renderThermo();
+    setClass($('thermo'), 'on', true);
+  }
+
+  function renderThermo() {
+    var box = $('thermo'), th = thermo, off = th.mode === 'OFF' || th.eco;
+    box.className = 'layer on' + (th.mode === 'HEAT' ? ' heat' : th.mode === 'COOL' ? ' cool' : '');
+    box.querySelector('.name').textContent = th.name;
+    box.querySelector('.target').textContent = off ? (th.eco ? tr('Eco') : tr('Off')) : thermoTarget + '°';
+    box.querySelector('.now').textContent = th.now !== undefined ? trf('Inside now: {t}', {t: Data.degrees(th.now)}) : '';
+    box.querySelector('.hint').textContent = off ? tr('Change the mode in the Google Home app') : tr('← → change · OK done');
+  }
+
+  function stepThermo(d) {
+    if (!thermo || thermo.mode === 'OFF' || thermo.eco) return;
+    thermoTarget += fahrenheit() ? d : d / 2;
+    renderThermo();
+    // Sent once the presses stop, not on each one.
+    clearTimeout(thermoTimer);
+    var th = thermo, v = thermoTarget;
+    thermoTimer = setTimeout(function () {
+      Nest.setTarget(th, toCelsius(v), function (err) { if (err) toast(trf("Couldn't change the thermostat: {why}", {why: err.message})); });
+    }, 1200);
+  }
+
+  function closeThermo() {
+    thermo = null;
+    setClass($('thermo'), 'on', false);
+    renderDrawer();
+  }
+
   /** Launch parameters: Nest's sign-in (from the computer) or a doorbell ring (from the service). */
   var lastLaunch = '';
 
@@ -1806,6 +1860,13 @@
       e.preventDefault();
       return;
     }
+    if (thermo) {
+      if (k === TV.keys.left || k === TV.keys.down) stepThermo(-1);
+      else if (k === TV.keys.right || k === TV.keys.up) stepThermo(1);
+      else if (k === TV.keys.back || k === 27 || k === 8 || k === TV.keys.ok) closeThermo();
+      e.preventDefault();
+      return;
+    }
     if (poke(k === TV.keys.ok)) { e.preventDefault(); return; }   // the first press only wakes the screen (or OK watches)
     if (typing(k)) return;
     if (k === TV.keys.left) move(-1, 0);
@@ -1945,5 +2006,5 @@
 
   // For the browser preview and tests.
   window.FreeMyTV = {state: st, move: move, activate: activate, back: back, showSaver: showSaver, hideSaver: hideSaver, toast: toast,
-    showAmbient: showAmbient, hideAmbient: hideAmbient, applyDim: applyDim, openCamera: openCamera, closeCamera: closeCamera};
+    showAmbient: showAmbient, hideAmbient: hideAmbient, applyDim: applyDim, openCamera: openCamera, closeCamera: closeCamera, openThermo: openThermo};
 })();
