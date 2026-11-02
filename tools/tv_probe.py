@@ -3,17 +3,33 @@
 
     python3 tools/tv_probe.py 192.168.86.42
 
-Only reads: it lists app folders and asks the TV's app manager which apps exist. Needs the key install.py saved.
+First open Multi View on the TV the usual way (Settings, then Multi View), then come back to Free My TV and run
+this. Free My TV notes each app that comes to the front, so Multi View's name is among the newest ones listed here.
+Only reads. Needs the key install.py saved.
 """
+import json
 import os
 import re
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'webos'))
 import install  # noqa: E402
 
-WANT = re.compile(r'multi|split|pip|twin|dual|screen ?share|mview', re.I)
+WANT = re.compile(r'multi|split|pip|twin|dual|mview|screenshare', re.I)
+
+
+def answer(out):
+    # luna-send-pub prints one JSON object per reply; take the last complete one.
+    for line in reversed(out.strip().splitlines()):
+        line = line.strip()
+        if line.startswith('{'):
+            try:
+                return json.loads(line)
+            except ValueError:
+                pass
+    return {}
 
 
 def main():
@@ -23,25 +39,20 @@ def main():
     key = install.key_path(ip)
     if not os.path.exists(key):
         sys.exit('Run python3 webos/install.py %s once first.' % ip)
-    found = set()
-    listing = install.ssh(ip, key, 'ls /usr/palm/applications /mnt/otycabi/usr/palm/applications '
-                                   '/mnt/otncabi/usr/palm/applications 2>/dev/null')
-    for line in (listing.stdout or '').split():
-        if WANT.search(line):
-            found.add(line.strip())
-    out = install.luna(ip, key, 'luna://com.webos.applicationManager/listApps', {}, wait=10)
-    for m in re.finditer(r'"id"\s*:\s*"([^"]+)"', out):
-        if WANT.search(m.group(1)):
-            found.add(m.group(1))
-    for m in re.finditer(r'"title"\s*:\s*"([^"]*(?:Multi|multi)[^"]*)"', out):
-        found.add('(title) ' + m.group(1))
-    if found:
-        print('Possible Multi View apps:')
-        for f in sorted(found):
-            print('  ' + f)
-    else:
-        print('Nothing named like Multi View was visible from Developer Mode.')
-        print('(listing: %d lines, app list: %d characters)' % (len((listing.stdout or '').split()), len(out)))
+
+    res = answer(install.luna(ip, key, 'luna://%s.service/watch' % install.APP_ID, {}, wait=10))
+    usage = res.get('usage') or {}
+    if not usage:
+        print('Free My TV hasn\'t noted any apps yet (the TV said: %s).' % (json.dumps(res)[:200] or 'nothing'))
+        print('Open Free My TV once, then Multi View, then come back and run this again.')
+        return
+    now = time.time() * 1000
+    newest = sorted(usage.items(), key=lambda kv: -kv[1])[:10]
+    print('Apps that came to the front, newest first:')
+    for app, at in newest:
+        mins = max(0, int((now - at) / 60000))
+        mark = '   <- looks like Multi View' if WANT.search(app) else ''
+        print('  %-45s %s%s' % (app, '%d min ago' % mins if mins else 'just now', mark))
 
 
 if __name__ == '__main__':
