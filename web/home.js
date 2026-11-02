@@ -921,7 +921,7 @@
         step: function (d) { cycle('doorbell', ['popup', 'full'], Prefs.doorbell(), d); Nest.start(); }});
     }
     if (TV.watchHome && TV.name === 'webos') {
-      rows.push({label: tr('After leaving an app'), value: Prefs.afterApp() === 'lg' ? tr('LG home screen') : tr('Back to Free My TV'),
+      rows.push({label: tr('After leaving an app'), value: Prefs.afterApp() === 'lg' ? tr('LG home screen') : tr('Back to Herscy TV'),
         step: function (d) { cycle('afterApp', ['here', 'lg'], Prefs.afterApp(), d); watchHome(); }});
     }
     rows.push({label: tr('Shelf'), value: '›', shelf: true, step: function (d) { if (d >= 0) openShelfEdit(); }});
@@ -1274,7 +1274,7 @@
     var list = el('div', 'list', box), holder = el('div', 'rows', list);
     var rows = [
       [tr('Model'), info && info.model], [tr('Firmware'), info && info.firmware], [tr('System'), info && info.system],
-      [tr('IP address'), info && info.ip], [tr('Time zone'), TV.zone()], ['Free My TV', info && info.version]
+      [tr('IP address'), info && info.ip], [tr('Time zone'), TV.zone()], ['Herscy TV', info && info.version]
     ];
     for (var i = 0; i < rows.length; i++) {
       var row = el('div', 'row', holder), label = el('span', '', row, rows[i][0]);
