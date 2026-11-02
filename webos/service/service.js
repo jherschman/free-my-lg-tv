@@ -10,7 +10,7 @@ var Service = require('webos-service');
 var service = new Service(require('./package.json').name);
 
 /** What the TV's remote control API is asked for: the app list, what's in front, and opening Free My TV again. */
-var PERMISSIONS = ['READ_INSTALLED_APPS', 'READ_RUNNING_APPS', 'LAUNCH', 'WRITE_NOTIFICATION_TOAST'];
+var PERMISSIONS = ['READ_INSTALLED_APPS', 'READ_RUNNING_APPS', 'LAUNCH', 'WRITE_NOTIFICATION_TOAST', 'WRITE_NOTIFICATION_ALERT'];
 
 function buffer(x) {   // Buffer.from is missing before Node 4.5
   return Buffer.from ? Buffer.from(x) : new Buffer(x);
@@ -144,11 +144,20 @@ function watch() {
       registered = true;
       watcher.key = m.payload['client-key'];
       send({type: 'subscribe', id: 'front', uri: 'ssap://com.webos.applicationManager/getForegroundAppInfo'});
-    } else if (m.id === 'toast' && m.type === 'error' && nest.ringing) {
+    } else if (m.id === 'alert' && m.type === 'error' && nest.ringing) {
+      // The TV wouldn't show the pop-up (not allowed yet, or older firmware): straight to the camera instead.
       openDoorbell(nest.ringing);
       nest.ringing = '';
-    } else if (m.id === 'toast') {
+    } else if (m.id === 'alert') {
       nest.ringing = '';
+      var alertId = m.payload && m.payload.alertId;
+      // Nobody answered on the TV: the pop-up goes away with the ring, after a minute.
+      if (alertId) {
+        clearTimeout(nest.alertTimer);
+        nest.alertTimer = setTimeout(function () {
+          if (watcher.socket === socket) send({type: 'request', id: 'unalert', uri: 'ssap://system.notifications/closeAlert', payload: {alertId: alertId}});
+        }, 60000);
+      }
     } else if (m.id === 'front' && m.payload) {
       var id = m.payload.appId || '';
       if (!id) return;
@@ -227,7 +236,7 @@ service.register('watch', function (message) {
  * view. Tokens stay in memory here and in the app's own storage; nothing is logged.
  */
 var https = require('https');
-var nest = {config: null, token: '', expires: 0, pulling: false, refused: false, retry: null, mode: 'popup', ringing: ''};
+var nest = {config: null, token: '', expires: 0, pulling: false, refused: false, retry: null, mode: 'popup', ringing: '', names: {}, alertTimer: null};
 
 function post(host, path, body, headers, done) {
   var data = typeof body === 'string' ? body : JSON.stringify(body);
@@ -270,20 +279,29 @@ function nestToken(done) {
 }
 
 /**
- * A ring: a notification over what's playing ("popup", the default; selecting it opens the live view), or the live
- * view at once ("full"). Where the TV refuses the notification, the live view opens.
+ * A ring: LG's pop-up over what's playing ("popup", the default; OK on Show camera opens the live view), or the live
+ * view at once ("full", or when Free My TV is already in front). Where the TV refuses the pop-up, the live view opens.
  */
 function ring(device) {
   if (nest.mode === 'full' || !watcher.socket || watcher.last === watcher.app) { openDoorbell(device); return; }
   nest.ringing = device;
-  watcher.socket.write(frame(JSON.stringify({type: 'request', id: 'toast', uri: 'ssap://system.notifications/createToast',
-    payload: {message: 'Doorbell: someone is at the door. Select to see the camera.', onClick: {appId: watcher.app,
-      params: {doorbell: device, at: Date.now(), prev: watcher.last && !LG_HOME.test(watcher.last) ? watcher.last : ''}}}})));
+  // LG's own pop-up, over whatever is playing, with the remote's focus on Show camera: OK opens Free My TV on the
+  // doorbell's live view (and Back there returns to the show). LG draws it, so it carries text, not video.
+  var name = String(nest.names[device] || 'Doorbell');
+  watcher.socket.write(frame(JSON.stringify({type: 'request', id: 'alert', uri: 'ssap://system.notifications/createAlert',
+    payload: {message: name + ': someone is at the door.', modal: false, buttons: [
+      {label: 'Show camera', focus: true, buttonType: 'ok', onClick: 'luna://com.webos.applicationManager/launch',
+        params: {id: watcher.app, params: ringParams(device)}},
+      {label: 'Dismiss', buttonType: 'cancel'}]}})));
+}
+
+function ringParams(device) {
+  return {doorbell: device, at: Date.now(), prev: watcher.last && !LG_HOME.test(watcher.last) && watcher.last !== watcher.app ? watcher.last : ''};
 }
 
 /** Free My TV to the front, on the doorbell's live view; Back there returns to what was playing. */
 function openDoorbell(device) {
-  var params = {doorbell: device, at: Date.now(), prev: watcher.last && !LG_HOME.test(watcher.last) && watcher.last !== watcher.app ? watcher.last : ''};
+  var params = ringParams(device);
   if (watcher.socket) {
     watcher.socket.write(frame(JSON.stringify({type: 'request', id: 'ring', uri: 'ssap://system.launcher/launch',
       payload: {id: watcher.app || 'io.freemytv', params: params}})));
@@ -330,6 +348,17 @@ function pullNest() {
 service.register('nest', function (message) {
   var p = message.payload || {};
   if (p.mode) nest.mode = p.mode === 'full' ? 'full' : 'popup';
+  if (p.names) nest.names = p.names;
+  if (p.testRing) {
+    // tools/ring_test.py: a pretend ring on the first doorbell (or camera), to try the pop-up without anyone at the door.
+    var ids = Object.keys(nest.names), bell = '';
+    for (var i = 0; i < ids.length && !bell; i++) if (/door/i.test(nest.names[ids[i]])) bell = ids[i];
+    if (!bell && ids.length) bell = ids[0];
+    if (!bell) { message.respond({returnValue: false, errorText: 'No cameras yet: open Free My TV once first'}); return; }
+    ring(bell);
+    message.respond({returnValue: true, ringing: nest.names[bell]});
+    return;
+  }
   if (p.config && p.config.refreshToken && p.config.subscription) {
     var changed = !nest.config || nest.config.refreshToken !== p.config.refreshToken;
     nest.config = p.config;

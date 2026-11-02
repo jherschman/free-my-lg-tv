@@ -69,6 +69,10 @@ var Nest = (function () {
       list.sort(function (a, b) { return (b.doorbell ? 1 : 0) - (a.doorbell ? 1 : 0); });
       cameras = list;
       thermostats = temps;
+      // The service names the doorbell in LG's pop-up.
+      var names = {};
+      for (var j = 0; j < list.length; j++) names[list[j].id] = list[j].name;
+      if (TV.nest) TV.nest({names: names}, function () {});
       done(list);
     });
   }
